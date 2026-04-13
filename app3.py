@@ -36,7 +36,7 @@ ENV_PROFILES = {
     },
     "PostgreSQL": {
         "host":     os.getenv("pg_db_host", ""),
-        "port":     os.getenv("pg_db_port", "5432"),
+        "port":     os.getenv("pg_db_port", "22354"),
         "user":     os.getenv("pg_db_user", ""),
         "password": os.getenv("pg_db_password", ""),
         "name":     os.getenv("pg_db_name", ""),

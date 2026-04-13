@@ -25,7 +25,7 @@ st.set_page_config(
 st.markdown("<style>#MainMenu, footer { visibility: hidden; }</style>", unsafe_allow_html=True)
 
 
-# ── ENV profiles (loaded once at startup) ─────────────────────────────────────
+# ── ENV profiles ──────────────────────────────────────────────────────────────
 ENV_PROFILES = {
     "HANA": {
         "host":     os.getenv("db_host", ""),
@@ -36,7 +36,7 @@ ENV_PROFILES = {
     },
     "PostgreSQL": {
         "host":     os.getenv("pg_db_host", ""),
-        "port":     os.getenv("pg_db_port", "22354"),
+        "port":     os.getenv("pg_db_port", "5432"),
         "user":     os.getenv("pg_db_user", ""),
         "password": os.getenv("pg_db_password", ""),
         "name":     os.getenv("pg_db_name", ""),
@@ -47,23 +47,29 @@ DB_OPTIONS = ["HANA", "PostgreSQL", "Other HANA", "Other PostgreSQL"]
 
 
 def _sanitize_key(raw: str) -> str:
-    """Strip whitespace, newlines and carriage returns from API keys."""
-    return raw.strip().replace("\n", "").replace("\r", "").replace(" ", "")
+    """Strip all whitespace variants that corrupt API keys in .env files."""
+    return raw.strip().replace("\n", "").replace("\r", "").replace(" ", "").replace("\t", "")
 
 
 # ── Session state defaults ─────────────────────────────────────────────────────
 def _init_conn_state():
-    raw_key = _sanitize_key(os.getenv("OPENAI_API_KEY", ""))  # ← sanitized at load
+    raw_key = _sanitize_key(os.getenv("OPENAI_API_KEY", ""))
+
+    # Force-write sanitized key back to env so cached resources use clean value
+    if raw_key:
+        os.environ["OPENAI_API_KEY"] = raw_key
+
     defaults = {
-        "cfg_db_option":  "HANA",
-        "cfg_host":       "",
-        "cfg_port":       "",
-        "cfg_user":       "",
-        "cfg_password":   "",
-        "cfg_name":       "",
-        "cfg_openai":     raw_key,
-        "cfg_saved":      False,
-        "form_version":   0,
+        "cfg_db_option":   "HANA",
+        "cfg_host":        "",
+        "cfg_port":        "",
+        "cfg_user":        "",
+        "cfg_password":    "",
+        "cfg_name":        "",
+        "cfg_openai":      raw_key,
+        "cfg_saved":       False,
+        "form_version":    0,
+        "last_cached_key": "",   # ← tracks which key the agent was built with
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -124,7 +130,7 @@ def get_agent(conn_str: str, openai_api_key: str):
     llm = ChatOpenAI(
         model="gpt-4o",
         temperature=0,
-        api_key=openai_api_key,                         # ← explicit, never from env
+        api_key=openai_api_key,
     )
     prefix = (
         "You are an expert SQL assistant connected to an employee database. "
@@ -228,7 +234,7 @@ with st.sidebar:
                 st.caption("⚠️ No API key set.")
             cfg_openai = st.text_input(
                 "API Key",
-                value="",                               # ← never pre-filled
+                value="",
                 type="password",
                 placeholder="sk-... (leave blank to keep existing)",
             )
@@ -252,15 +258,14 @@ with st.sidebar:
                     st.session_state.cfg_user     = profile["user"]
                     st.session_state.cfg_password = profile["password"]
 
-                # ── API key: sanitize and only update if user typed something
                 new_key = _sanitize_key(cfg_openai or "")
                 if new_key:
-                    st.session_state.cfg_openai  = new_key
-                    os.environ["OPENAI_API_KEY"]  = new_key
+                    st.session_state.cfg_openai      = new_key
+                    os.environ["OPENAI_API_KEY"]      = new_key
+                    st.session_state.last_cached_key  = ""  # ← force agent rebuild
                 elif not st.session_state.cfg_openai:
                     st.warning("⚠️ OpenAI API key is required.")
                     st.stop()
-                # else: blank input + existing key → keep existing silently
 
                 conn_str = _connection_str()
                 if not conn_str:
@@ -370,6 +375,11 @@ with st.sidebar:
 if not conn_str or not st.session_state.cfg_saved:
     st.stop()
 
+# ── Bust agent cache if key changed since last build ──────────────────────────
+if st.session_state.last_cached_key != st.session_state.cfg_openai:
+    get_agent.clear()
+    st.session_state.last_cached_key = st.session_state.cfg_openai
+
 # ── Header ────────────────────────────────────────────────────────────────────
 st.markdown("## 👥 Employee Information System")
 st.caption("Ask questions or insert employees via the sidebar form — powered by GPT-4o")
@@ -409,7 +419,7 @@ if user_input:
                 st.error("⚠️ OpenAI API key is not set. Please update it in Connection Settings.")
                 st.stop()
 
-            agent_executor = get_agent(conn_str, openai_key)  # ← key passed explicitly
+            agent_executor = get_agent(conn_str, openai_key)
             with st.spinner("Processing…"):
                 response = agent_executor.invoke({"input": user_input})
                 answer = response["output"]

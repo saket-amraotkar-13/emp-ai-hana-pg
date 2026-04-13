@@ -1,0 +1,14 @@
+langchain_openai
+fastapi
+sse_starlette
+streamlit
+langchain_tavily
+langchain-tavily
+python-dotenv
+langgraph
+uvicorn
+sqlalchemy-hana
+sqlalchemy
+langchain_core
+langchain
+langchain_community

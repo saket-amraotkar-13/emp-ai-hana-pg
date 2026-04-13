@@ -12,3 +12,4 @@ sqlalchemy
 langchain_core
 langchain
 langchain_community
+psycopg2-binary

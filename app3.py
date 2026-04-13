@@ -216,8 +216,10 @@ with st.sidebar:
                 # Hidden — values come from ENV_PROFILES on save
                 cfg_host = cfg_port = cfg_name = cfg_user = cfg_pw = None
 
-            st.markdown("**OpenAI**")
-            cfg_openai = st.text_input("API Key", value=st.session_state.cfg_openai, type="password")
+                st.markdown("**OpenAI**")
+                if st.session_state.cfg_openai:
+                    st.caption("✅ API key is set — enter a new one to replace it.")
+                cfg_openai = st.text_input("API Key", value="", type="password", placeholder="sk-... (leave blank to keep existing)")
 
             save = st.form_submit_button("💾 Save & Test", use_container_width=True)
 

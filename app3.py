@@ -46,8 +46,14 @@ ENV_PROFILES = {
 DB_OPTIONS = ["HANA", "PostgreSQL", "Other HANA", "Other PostgreSQL"]
 
 
+def _sanitize_key(raw: str) -> str:
+    """Strip whitespace, newlines and carriage returns from API keys."""
+    return raw.strip().replace("\n", "").replace("\r", "").replace(" ", "")
+
+
 # ── Session state defaults ─────────────────────────────────────────────────────
 def _init_conn_state():
+    raw_key = _sanitize_key(os.getenv("OPENAI_API_KEY", ""))  # ← sanitized at load
     defaults = {
         "cfg_db_option":  "HANA",
         "cfg_host":       "",
@@ -55,7 +61,7 @@ def _init_conn_state():
         "cfg_user":       "",
         "cfg_password":   "",
         "cfg_name":       "",
-        "cfg_openai":     os.getenv("OPENAI_API_KEY", ""),  # loaded from .env only
+        "cfg_openai":     raw_key,
         "cfg_saved":      False,
         "form_version":   0,
     }
@@ -113,12 +119,12 @@ def get_database(conn_str: str) -> SQLDatabase:
 
 
 @st.cache_resource
-def get_agent(conn_str: str, openai_api_key: str):      # ← key is explicit parameter
+def get_agent(conn_str: str, openai_api_key: str):
     db = get_database(conn_str)
     llm = ChatOpenAI(
         model="gpt-4o",
         temperature=0,
-        api_key=openai_api_key,                         # ← passed directly, not from env
+        api_key=openai_api_key,                         # ← explicit, never from env
     )
     prefix = (
         "You are an expert SQL assistant connected to an employee database. "
@@ -217,7 +223,9 @@ with st.sidebar:
             # ── OpenAI key — write-only ────────────────────────────────────
             st.markdown("**OpenAI**")
             if st.session_state.cfg_openai:
-                st.caption("✅ API key is set — enter a new one to replace it.")
+                st.caption(f"✅ API key set ({len(st.session_state.cfg_openai)} chars) — enter a new one to replace it.")
+            else:
+                st.caption("⚠️ No API key set.")
             cfg_openai = st.text_input(
                 "API Key",
                 value="",                               # ← never pre-filled
@@ -244,8 +252,8 @@ with st.sidebar:
                     st.session_state.cfg_user     = profile["user"]
                     st.session_state.cfg_password = profile["password"]
 
-                # ── API key: only update if user typed something ───────────
-                new_key = (cfg_openai or "").strip()
+                # ── API key: sanitize and only update if user typed something
+                new_key = _sanitize_key(cfg_openai or "")
                 if new_key:
                     st.session_state.cfg_openai  = new_key
                     os.environ["OPENAI_API_KEY"]  = new_key
@@ -396,7 +404,12 @@ if user_input:
 
     with st.chat_message("assistant", avatar="🤖"):
         try:
-            agent_executor = get_agent(conn_str, st.session_state.cfg_openai)  # ← key passed explicitly
+            openai_key = st.session_state.cfg_openai
+            if not openai_key:
+                st.error("⚠️ OpenAI API key is not set. Please update it in Connection Settings.")
+                st.stop()
+
+            agent_executor = get_agent(conn_str, openai_key)  # ← key passed explicitly
             with st.spinner("Processing…"):
                 response = agent_executor.invoke({"input": user_input})
                 answer = response["output"]

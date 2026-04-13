@@ -14,7 +14,6 @@ load_dotenv()
 os.environ["LANGSMITH_API_KEY"] = os.getenv("LANGSMITH_API_KEY", "")
 os.environ["LANGSMITH_ENDPOINT"] = os.getenv("LANGSMITH_ENDPOINT", "")
 os.environ["LANGSMITH_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "")
-os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY", "")
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -50,13 +49,13 @@ DB_OPTIONS = ["HANA", "PostgreSQL", "Other HANA", "Other PostgreSQL"]
 # ── Session state defaults ─────────────────────────────────────────────────────
 def _init_conn_state():
     defaults = {
-        "cfg_db_option":  "HANA",   # one of DB_OPTIONS
+        "cfg_db_option":  "HANA",
         "cfg_host":       "",
         "cfg_port":       "",
         "cfg_user":       "",
         "cfg_password":   "",
         "cfg_name":       "",
-        "cfg_openai":     os.getenv("OPENAI_API_KEY", ""),
+        "cfg_openai":     os.getenv("OPENAI_API_KEY", ""),  # loaded from .env only
         "cfg_saved":      False,
         "form_version":   0,
     }
@@ -68,12 +67,10 @@ _init_conn_state()
 
 
 def _is_manual(option: str) -> bool:
-    """Returns True for options that require manual input."""
     return option in ("Other HANA", "Other PostgreSQL")
 
 
 def _db_type(option: str) -> str:
-    """Canonical DB type from selected option."""
     return "PostgreSQL" if "PostgreSQL" in option else "HANA"
 
 
@@ -116,9 +113,13 @@ def get_database(conn_str: str) -> SQLDatabase:
 
 
 @st.cache_resource
-def get_agent(conn_str: str):
+def get_agent(conn_str: str, openai_api_key: str):      # ← key is explicit parameter
     db = get_database(conn_str)
-    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    llm = ChatOpenAI(
+        model="gpt-4o",
+        temperature=0,
+        api_key=openai_api_key,                         # ← passed directly, not from env
+    )
     prefix = (
         "You are an expert SQL assistant connected to an employee database. "
         "You can run SELECT queries to answer questions AND run INSERT statements to add new employees "
@@ -187,13 +188,12 @@ with st.sidebar:
                 "Database Profile",
                 DB_OPTIONS,
                 index=DB_OPTIONS.index(st.session_state.cfg_db_option),
-                help="HANA / PostgreSQL loads credentials from .env. 'Other' lets you enter them manually.",
+                help="HANA / PostgreSQL loads from .env. 'Other' lets you enter details manually.",
             )
 
             manual = _is_manual(cfg_db_option)
 
             if manual:
-                # ── Manual entry ───────────────────────────────────────────
                 st.caption(f"Enter connection details for your {_db_type(cfg_db_option)} database.")
                 default_port = "5432" if "PostgreSQL" in cfg_db_option else "443"
                 cfg_host = st.text_input("Host *",     placeholder="mydb.example.com")
@@ -202,7 +202,6 @@ with st.sidebar:
                 cfg_user = st.text_input("Username *", placeholder="admin")
                 cfg_pw   = st.text_input("Password *", type="password")
             else:
-                # ── Preview env profile (read-only) ────────────────────────
                 profile = ENV_PROFILES[cfg_db_option]
                 st.caption(f"Loaded from `.env` — `{'pg_db_*' if cfg_db_option == 'PostgreSQL' else 'db_*'}` keys")
                 st.code(
@@ -213,13 +212,18 @@ with st.sidebar:
                     f"Password: {'••••••••' if profile['password'] else '(not set)'}",
                     language="text",
                 )
-                # Hidden — values come from ENV_PROFILES on save
                 cfg_host = cfg_port = cfg_name = cfg_user = cfg_pw = None
 
-                st.markdown("**OpenAI**")
-                if st.session_state.cfg_openai:
-                    st.caption("✅ API key is set — enter a new one to replace it.")
-                cfg_openai = st.text_input("API Key", value="", type="password", placeholder="sk-... (leave blank to keep existing)")
+            # ── OpenAI key — write-only ────────────────────────────────────
+            st.markdown("**OpenAI**")
+            if st.session_state.cfg_openai:
+                st.caption("✅ API key is set — enter a new one to replace it.")
+            cfg_openai = st.text_input(
+                "API Key",
+                value="",                               # ← never pre-filled
+                type="password",
+                placeholder="sk-... (leave blank to keep existing)",
+            )
 
             save = st.form_submit_button("💾 Save & Test", use_container_width=True)
 
@@ -227,14 +231,12 @@ with st.sidebar:
                 st.session_state.cfg_db_option = cfg_db_option
 
                 if manual:
-                    # Use what the user typed
                     st.session_state.cfg_host     = (cfg_host or "").strip()
                     st.session_state.cfg_port     = (cfg_port or "").strip()
                     st.session_state.cfg_name     = (cfg_name or "").strip()
                     st.session_state.cfg_user     = (cfg_user or "").strip()
                     st.session_state.cfg_password = cfg_pw or ""
                 else:
-                    # Load straight from ENV_PROFILES
                     profile = ENV_PROFILES[cfg_db_option]
                     st.session_state.cfg_host     = profile["host"]
                     st.session_state.cfg_port     = profile["port"]
@@ -242,9 +244,15 @@ with st.sidebar:
                     st.session_state.cfg_user     = profile["user"]
                     st.session_state.cfg_password = profile["password"]
 
-                if cfg_openai and cfg_openai.strip():
-                    st.session_state.cfg_openai  = cfg_openai.strip()
-                    os.environ["OPENAI_API_KEY"]  = cfg_openai.strip()
+                # ── API key: only update if user typed something ───────────
+                new_key = (cfg_openai or "").strip()
+                if new_key:
+                    st.session_state.cfg_openai  = new_key
+                    os.environ["OPENAI_API_KEY"]  = new_key
+                elif not st.session_state.cfg_openai:
+                    st.warning("⚠️ OpenAI API key is required.")
+                    st.stop()
+                # else: blank input + existing key → keep existing silently
 
                 conn_str = _connection_str()
                 if not conn_str:
@@ -266,8 +274,7 @@ with st.sidebar:
     conn_str = _connection_str()
     if conn_str and st.session_state.cfg_saved:
         label = "SAP HANA" if _db_type(st.session_state.cfg_db_option) == "HANA" else "PostgreSQL"
-        profile_name = st.session_state.cfg_db_option
-        st.success(f"🟢 {label} · {profile_name}")
+        st.success(f"🟢 {label} · {st.session_state.cfg_db_option}")
     elif not conn_str:
         st.warning("⚠️ Configure connection settings above.")
         st.stop()
@@ -389,7 +396,7 @@ if user_input:
 
     with st.chat_message("assistant", avatar="🤖"):
         try:
-            agent_executor = get_agent(conn_str)
+            agent_executor = get_agent(conn_str, st.session_state.cfg_openai)  # ← key passed explicitly
             with st.spinner("Processing…"):
                 response = agent_executor.invoke({"input": user_input})
                 answer = response["output"]
